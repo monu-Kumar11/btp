@@ -233,42 +233,49 @@ def extract_keywords(questions, task, openai_key):
         "arc_challenge": "Extract at most three keywords separated by comma from the question as queries that can be used for searching to extract the key information. \n\nquestion: An astronomer observes that a planet rotates faster after a meteorite impact. Which is the most likely effect of this increase in rotation?\nquery: most likely effect of increase in rotation, a planet rotates faster after a meteorite impact\n\nclaim: Jefferson's class was studying sunflowers. They learned that sunflowers are able to make their own food. Which parts of a sunflower collect most of the sunlight needed to make food? \nquery: which parts of a sunflower collect most of the sunlight needed to make food\n\nquestion: A man climbed to the top of a very high mountain. While on the mountain top, he drank all the water in his plastic water bottle and then put the cover back on. When he returned to camp in the valley, he discovered the the empty bottle had collapsed. Which of the following best explains why this happened?\nquery: best to explain the phenomenon, put the cover back of empty plastic bottle on the mountain top, empty bottle collapse in the valley\n\nquestion: There are two types of modern whales: toothed whales and baleen whales. Baleen whales filter plankton from the water using baleen, plates made of fibrous proteins that grow from the roof of their mouths. The embryos of baleen whales have teeth in their upper jaws. As the embryos develop, the teeth are replaced with baleen. Which of the following conclusions is best supported by this information?\nquery: two types of whales toothed whales and baleen whales, baleen whales filter plankton with baleen, teeth replaced with baleen\n\nquestion: {{question}}\nquery:",
     }
     assert task in TASK_PROMPT, "Your task is not included in TASK_PROMPT for a few-shot prompt template."
-    openai.api_key = openai_key
     queries = []
     prompt_template = TASK_PROMPT[task]
-    for question in tqdm(questions[:]):
-        inputs = prompt_template.format(
-            question=question
-        )
-        messages = [
-            {"role": "user", "content": inputs},
-        ]
-        
+
+    # Try modern or legacy OpenAI API if key is present
+    use_api = bool(openai_key and len(openai_key.strip()) > 5)
+    client = None
+    if use_api:
         try:
-            completion = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-16k", 
-                temperature=0.1,
-                messages=messages,
-            )
-        except openai.error.RateLimitError:
-            print('Rate limit error')
-            sleep(60)
+            if hasattr(openai, "OpenAI"):
+                client = openai.OpenAI(api_key=openai_key)
+            else:
+                openai.api_key = openai_key
+        except Exception:
+            client = None
+
+    for question in tqdm(questions[:]):
+        if use_api:
+            inputs = prompt_template.format(question=question)
+            messages = [{"role": "user", "content": inputs}]
             try:
-                completion = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo-16k", 
-                    temperature=0.1,
-                    messages=messages,
-                )
-            except openai.error.RateLimitError:
-                print('Rate limit error')
-                sleep(60)
-                completion = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo-16k", 
-                    temperature=0.1,
-                    messages=messages,
-                )
-        results = completion["choices"][0]["message"]["content"]
-        queries.append(results)
+                if client is not None:
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        temperature=0.1,
+                        messages=messages,
+                    )
+                    results = response.choices[0].message.content.strip()
+                else:
+                    completion = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        temperature=0.1,
+                        messages=messages,
+                    )
+                    results = completion["choices"][0]["message"]["content"].strip()
+                queries.append(results)
+                continue
+            except Exception as e:
+                print(f"OpenAI API call skipped/failed: {e}")
+
+        # Fallback local keyphrase extraction: remove stop words / question words
+        words = [w.strip("?,.!") for w in question.split() if w.lower() not in {"what", "is", "the", "a", "an", "of", "in", "was", "were", "born", "who", "which", "how", "did"}]
+        kw = ", ".join(words[:4]) if words else question
+        queries.append(kw)
     return queries
 
 def select_relevants(strips, query, tokenizer, model, device, top_n=5):

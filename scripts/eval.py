@@ -62,14 +62,15 @@ def main():
 
     input_path = args.input_file
     if input_path.endswith(".json"):
-        input_data = json.load(open(input_path))
+        with open(input_path, 'r', encoding='utf-8') as f:
+            input_data = json.load(f)
     else:
         input_data = load_jsonlines(input_path)
 
     input_data = preprocess_input_data(
         input_data, task=args.task)
     eval_file = args.eval_file
-    with open(eval_file, 'r') as f:
+    with open(eval_file, 'r', encoding='utf-8') as f:
         resps = [l.strip()[:] for l in f.readlines()]    
     preds = []
     prompts = []

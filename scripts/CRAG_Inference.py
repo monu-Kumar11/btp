@@ -46,7 +46,7 @@ def format_prompt(i, task, question, paragraph=None, modelname="selfrag_llama"):
     instruction = instruction + "\n\n## Input:\n\n" + question if instruction is not None else question
 
     if task == "arc_challenge":
-        with open("../data/arc_challenge/choices", 'r') as f:
+        with open("../data/arc_challenge/choices", 'r', encoding='utf-8') as f:
             choices = f.readlines()[i].strip()
         choices = choices.replace("A: ", "\nA: ")
         choices = choices.replace("B: ", "\nB: ")
@@ -220,9 +220,19 @@ def main():
     args = parser.parse_args()
     args.lower_threshold = -args.lower_threshold
 
-    generator = LLM(model=args.generator_path, dtype="half")
-    sampling_params = SamplingParams(temperature=0.0, top_p=1.0, max_tokens=100, skip_special_tokens=False)
-    
+    # Load generator model (support vLLM or standard HuggingFace)
+    try:
+        from vllm import LLM, SamplingParams
+        generator = LLM(model=args.generator_path, dtype="half")
+        sampling_params = SamplingParams(temperature=0.0, top_p=1.0, max_tokens=100, skip_special_tokens=False)
+        is_vllm = True
+    except (ImportError, Exception) as err:
+        print(f"vLLM not available or failed to load ({err}), falling back to HuggingFace pipeline.")
+        from transformers import pipeline
+        device_id = 0 if torch.cuda.is_available() else -1
+        generator = pipeline("text-generation", model=args.generator_path, device=device_id)
+        is_vllm = False
+
     tokenizer = T5Tokenizer.from_pretrained(args.evaluator_path)
     model = T5ForSequenceClassification.from_pretrained(args.evaluator_path, num_labels=1)
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device("cpu")
@@ -242,10 +252,10 @@ def main():
         )
         identification_flag = process_flag(scores, args.ndocs, args.upper_threshold, args.lower_threshold)
 
-        with open(args.internal_knowledge_path, 'r') as in_f, open(args.external_knowledge_path, 'r') as ex_f, open(args.combined_knowledge_path, 'r') as comb_f:
-            internal_paragraphs = [l.strip() for l in in_f.readlines()]
-            external_paragraphs = [l.strip() for l in ex_f.readlines()]
-            combined_paragraphs = [l.strip() for l in comb_f.readlines()]
+        with open(args.internal_knowledge_path, 'r', encoding='utf-8') as in_f, open(args.external_knowledge_path, 'r', encoding='utf-8') as ex_f, open(args.combined_knowledge_path, 'r', encoding='utf-8') as comb_f:
+            internal_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in in_f.readlines()]
+            external_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in ex_f.readlines()]
+            combined_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in comb_f.readlines()]
 
         paragraphs = []
         n = 0
@@ -263,16 +273,26 @@ def main():
     if args.method != 'no_retrieval':
         for i, (q, p) in tqdm(enumerate(zip(queries, paragraphs))):
             prompt = format_prompt(i, args.task, q, p, modelname)
-            pred = generator.generate([prompt], sampling_params)
-            preds.append(postprocess_answer_option_conditioned(pred[0].outputs[0].text))
+            if is_vllm:
+                pred = generator.generate([prompt], sampling_params)
+                preds.append(postprocess_answer_option_conditioned(pred[0].outputs[0].text))
+            else:
+                out = generator(prompt, max_new_tokens=100, do_sample=False)
+                generated_text = out[0]['generated_text'][len(prompt):] if out[0]['generated_text'].startswith(prompt) else out[0]['generated_text']
+                preds.append(postprocess_answer_option_conditioned(generated_text))
     else:
         for i, q in tqdm(enumerate(queries)):
             p = None
             prompt = format_prompt(i, args.task, q, p, modelname)
-            pred = generator.generate([prompt], sampling_params)
-            preds.append(postprocess_answer_option_conditioned(pred[0].outputs[0].text))
+            if is_vllm:
+                pred = generator.generate([prompt], sampling_params)
+                preds.append(postprocess_answer_option_conditioned(pred[0].outputs[0].text))
+            else:
+                out = generator(prompt, max_new_tokens=100, do_sample=False)
+                generated_text = out[0]['generated_text'][len(prompt):] if out[0]['generated_text'].startswith(prompt) else out[0]['generated_text']
+                preds.append(postprocess_answer_option_conditioned(generated_text))
 
-    with open(args.output_file, 'w') as f:
+    with open(args.output_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(preds))
 
 

@@ -83,7 +83,7 @@ def knowledge_refinement(psgs, queries, output_path, model_name, device, decompo
         output_idxs.append(idxs)
         progress_bar.update(1)
 
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         f.write('#')
         f.write('\n#'.join(output_results))
 
@@ -98,7 +98,7 @@ def main():
     parser.add_argument('--device', type=str, default="cuda:0")
     args = parser.parse_args()
 
-    with open(args.input_retrieval, 'r') as psg_f, open(args.input_queries, 'r') as query_f:
+    with open(args.input_retrieval, 'r', encoding='utf-8') as psg_f, open(args.input_queries, 'r', encoding='utf-8') as query_f:
         passages = [p.strip().split('[sep]') for p in psg_f.readlines()]
         queries = [q.strip() for q in query_f.readlines()]
 

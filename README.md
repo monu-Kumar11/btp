@@ -1,151 +1,184 @@
-# Corrective Retrieval Augmented Generation
-This repository releases the source code for the paper:
-- [Corrective Retrieval Augmented Generation](https://arxiv.org/pdf/2401.15884.pdf). <br>
-  Shi-Qi Yan, Jia-Chen Gu, Yun Zhu, Zhen-Hua Ling <br>
+# Corrective Retrieval Augmented Generation (CRAG)
+
+This repository contains the complete, cross-platform working implementation of the paper:
+- **[Corrective Retrieval Augmented Generation](https://arxiv.org/pdf/2401.15884.pdf)** (ICLR / arXiv:2401.15884)
+  *Shi-Qi Yan, Jia-Chen Gu, Yun Zhu, Zhen-Hua Ling*
+
+---
 
 ## Overview
-Large language models (LLMs) inevitably exhibit hallucinations since the accuracy of generated texts cannot be secured solely by the parametric knowledge they encapsulate. Although retrieval-augmented generation (RAG) is a practicable complement to LLMs, it relies heavily on the relevance of retrieved documents, raising concerns about how the model behaves if retrieval goes wrong. To this end, we propose the **Corrective Retrieval Augmented Generation (CRAG)** to improve the robustness of generation. Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval actions can be triggered. Since retrieval from static and limited corpora can only return sub-optimal documents, large-scale web searches are utilized as an extension for augmenting the retrieval results. Besides, a decompose-then-recompose algorithm is designed for retrieved documents to selectively focus on key information and filter out irrelevant information in them. CRAG is plug-and-play and can be seamlessly coupled with various RAG-based approaches. Experiments on four datasets covering short- and long-form generation tasks show that CRAG can significantly improve the performance of RAG-based approaches.
 
-<div align=center>
-  <img src="https://github.com/HuskyInSalt/CRAG/blob/main/img/crag_method_overview.png" width=80%>
-  <img src="https://github.com/HuskyInSalt/CRAG/blob/main/img/crag_result.png" width=60%>
-</div>
+Large Language Models (LLMs) inevitably exhibit hallucinations when retrieved documents are irrelevant or inaccurate. **Corrective Retrieval Augmented Generation (CRAG)** is a plug-and-play framework designed to self-correct retrieval results and optimize document utilization for augmented generation:
 
-## Update
-- 2024-10-08: Revise the prompt format in the inference stage to improve the performance in RAG and CRAG modes and make the generator follow instructions better.
-- 2024-03-04: Release the knowledge preparation including knowledge refinement and knowledge search to gather correct, incorrect and ambiguous knowledge.
-- 2024-03-02: Release the fine-tuning of the evaluator and training data preprocessed on PopQA.
-- 2024-03-01: Release the data preprocess and data preparation for the inference of Self-CRAG. 
-- 2024-02-22: Release the inference of CRAG and the weights of the retrieval evaluator used in our experiments. Will release the inference of Self-CRAG and the fine-tuning of the retrieval evaluator soon.
+1. **Lightweight Retrieval Evaluator**: Estimates the overall quality of retrieved documents for an input query and returns a confidence degree.
+2. **Action Triggering**: Triggers tailored retrieval actions based on confidence thresholds:
+   - **Correct**: Executes Knowledge Refinement via a *Decompose-then-Recompose* algorithm into fine-grained internal knowledge strips.
+   - **Incorrect**: Discards static retrieval results and triggers Knowledge Searching via query rewriting and external web/Wikipedia search.
+   - **Ambiguous**: Combines refined internal knowledge and external search knowledge.
+3. **Augmented Generator**: Synthesizes the final output using the refined/corrected knowledge context.
 
-## Requirements
-**Note: We use Python 3.11 for CRAG** To get started, install conda and run:
-```
-git clone https://github.com/HuskyInSalt/CRAG.git
-conda create -n CRAG python=3.11
-...
-pip install -r requirements.txt
-```
+---
 
-## Download
-- Download the **eval_data** created by [Self-RAG (Asai et al., 2023)](https://github.com/AkariAsai/self-rag) on PopQA, PubQA, Bio and Arc_challenge with retrieved results 
-- Download the **LLaMA-2** fine-tuned by [Self-RAG (Asai et al., 2023)](https://huggingface.co/selfrag/selfrag_llama2_7b).
-- Download the fine-tuned weights of the [retrieval evaluator](https://drive.google.com/drive/folders/1CRFGsyNguXJwKSvFvJm_82GOOlkWSkW7?usp=drive_link) used in our experiments.
-- Download the [training data](https://drive.google.com/file/d/1YXyMtROND7oKTi1MgfrKm7ZVS5FTXSqW/view?usp=sharing) for the evaluator.
+## Key Enhancements & Bug Fixes
 
-## Data Preprocess
-Run the following command to preprocess the dataset for questions and retrieval results. Specifically for PopQA, the label of each (question, passage) pair is also collected.
-```
-bash run_data_preprocess.sh
+This implementation includes critical bug fixes and cross-platform compatibility updates over the original codebase:
+- **Windows OS Compatibility**: Fixed POSIX-only Unix signal calls (`signal.SIGALRM`) in page fetching routines to use standard cross-platform HTTP timeouts (`requests.get(url, timeout=10)`).
+- **OpenAI API v1+ Support**: Updated keyword extraction routines to support modern `openai>=1.0.0` syntax alongside a built-in local rule-based fallback keyword extractor when API keys are absent.
+- **Combined Knowledge Preparation**: Fixed missing imports (`import argparse`), uninitialized variables, and invalid loop syntax (`enumerate(zip(...))`).
+- **Inference & Text Formatting**: Stripped leading `#` formatting characters when reading refined knowledge files and added automatic HuggingFace generator fallback when `vLLM` is unavailable.
+- **UTF-8 Encoding**: Added explicit `encoding='utf-8'` across all file reading/writing operations.
+
+---
+
+## Quick Start (Running the End-to-End Demo)
+
+To run the complete CRAG pipeline end-to-end (Retrieval Evaluator scoring $\rightarrow$ Action Triggering into `{CORRECT, INCORRECT, AMBIGUOUS}` $\rightarrow$ Knowledge Refinement/Search $\rightarrow$ Answer Generation):
+
+```bash
+python demo_crag.py
 ```
 
-## Run CRAG
-### Evaluator fine-tuning
-Run the following command to fine-tune the evaluator.
-```
-bash run_evaluator_training.sh
-```
-The training data is shared and can be downloaded, the method of label collection is similar to the test set preparation in `scripts/data_process.py`.
+---
 
-### Knowledge Preparation
-Run the following command to gather knowledge for inference, including `correct`, `incorrect` and `ambiguous`.
-```
-bash run_knowledge_preparation.sh
-```
-Specifically, you can also run the following commands individually.
-#### Correct
-According to the paper, we decompose the retrieval results and filter out irrelevant parts. Three modes are listed to decompose passages: `fixed_num`, `excerption` and `selection`.
-`fixed_num` segments passages into a fixed number of words, 'excerption' segments passages based on the end of the sentences, while passages are not divided in `selection` mode.
-You can choose the mode by `--decompose_mode`.
-```
-python internal_knowledge_preparation.py \
---model_path YOUR_EVALUATOR_PATH \
---input_queries ../data/$dataset/sources \
---input_retrieval ../data/$dataset/retrieved_psgs \
---decompose_mode selection \
---output_file ../data/$dataset/ref/correct 
-```
+## Installation & Requirements
 
-#### Incorrect
-Question rewriting and web searching are proposed here, thus an openai_api_key and a search_key are required.
-In this experiment, we utilized a [third-party Google Search API platform](https://serper.dev/) for searching.
-Two selective modes including `wiki` and `all` are available.
-`wiki` visits pages related to Wikipedia preferentially, while `all` visit all pages equally.
-```
-python external_knowledge_preparation.py \
---model_path YOUR_EVALUATOR_PATH \
---input_queries ../data/$dataset/sources \
---openai_key $OPENAI_KEY \
---search_key $SEARCH_KEY \
---task $dataset --mode wiki\
---output_file ../data/$dataset/ref/incorrect 
+1. **Clone Repository**:
+   ```bash
+   git clone https://github.com/monu-Kumar11/btp.git
+   cd btp
+   ```
+
+2. **Python Environment**:
+   Python 3.11 is recommended. Install required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+   Or install core requirements:
+   ```bash
+   pip install torch transformers jsonlines sentencepiece openai beautifulsoup4 requests pandas scikit-learn tqdm
+   ```
+
+---
+
+## Detailed Step-by-Step Usage Guide
+
+### 1. Data Preprocessing
+Preprocess dataset questions and retrieval results for PopQA, PubQA, Arc-Challenge, or Bio:
+```bash
+python scripts/data_process.py --dataset popqa
 ```
 
-#### Ambiguous
-Run the following command to combine both correct and incorrect knowledge for ambiguous action.
-```
-python combined_knowledge_preparation.py \
---correct_path ../data/$dataset/ref/correct \
---incorrect_path ../data/$dataset/ref/incorrect \
---ambiguous_path ../data/$dataset/ref/ambiguous 
-```
-
-### Inference
-#### CRAG
-Run the following command for CRAG inference.
-```
-bash run_crag_inference.sh
-```
-#### Self-CRAG
-Run the following command for Self-CRAG data preparation.
-```
-bash run_selfcrag_preparation.sh
-```
-With this command, the retrieval results of the original input files of Self-RAG will be replaced by correct, incorrect and ambiguous context. Then follow the instructions at [Self-RAG (Asai et al., 2023)](https://github.com/AkariAsai/self-rag) for the ultimate results.
-
-### Evaluation
-For Bio evaluation, please follow the instructions at the [FactScore (Min et al., 2023)](https://github.com/shmsw25/FActScore) official repository. 
-```
-python -m factscore.factscorer --data_path YOUR_OUTPUT_FILE  --model_name retrieval+ChatGPT --cache_dir YOUR_CACHE_DIR --openai_key YOUR_OPEN_AI_KEY --verbose
+### 2. Retrieval Evaluator Fine-Tuning
+To fine-tune the lightweight T5 retrieval evaluator model on query-document pairs:
+```bash
+python scripts/train_evaluator.py \
+  --train_file data/popqa/test_popqa.txt \
+  --save_path evaluator_model \
+  --batch_size 12 \
+  --num_epochs 8 \
+  --seed 42
 ```
 
-It is worth mentioning that, previous FactScore adopted **text-davinci-003** by default, which has been [deprecated since 2024-01-04](https://platform.openai.com/docs/deprecations) and replaced by **gpt-3.5-turbo-instruct**.
-Both results of CRAG and Self-CRAG reported are based on the **text-davinci-003**, which may differ from the current **gpt-3.5-turbo-instruct** evaluation.
+### 3. Knowledge Preparation
 
-For the other datasets, run the following command.
-```
-bash run_eval.sh
-```
-
-e.g., PopQA
-```
-python eval.py \
-  --input_file eval_data/popqa_longtail_w_gs.jsonl \
-  --eval_file ../data/popqa/output/YOUR_OUTPUT_FILE \
-  --metric match 
+#### A. Internal Knowledge Refinement (Correct Action)
+Decomposes retrieved passages into strips, scores strip relevance with the evaluator, and recomposes top strips:
+```bash
+python scripts/internal_knowledge_preparation.py \
+  --model_path t5-small \
+  --input_queries data/popqa/sources \
+  --input_retrieval data/popqa/retrieved_psgs \
+  --decompose_mode selection \
+  --output_file data/popqa/ref/correct
 ```
 
-PubHealth
-```
-python eval.py \
-  --input_file eval_data/health_claims_processed.jsonl \
-  --eval_file ../data/pubqa/output/YOUR_OUTPUT_FILE \
-  --metric match --task fever
-```
-
-Arc_Challenge
-```
-python run_test_eval.py \
-  --input_file eval_data/arc_challenge_processed.jsonl \
-  --eval_file ../data/arc_challenge/output/YOUR_OUTPUT_FILE \
-  --metric match --task arc_c
+#### B. External Knowledge Search (Incorrect Action)
+Rewrites queries into search keywords and retrieves external web/Wikipedia content:
+```bash
+python scripts/external_knowledge_preparation.py \
+  --model_path t5-small \
+  --input_queries data/popqa/sources \
+  --task popqa \
+  --mode wiki \
+  --output_file data/popqa/ref/incorrect
 ```
 
+#### C. Combined Knowledge Preparation (Ambiguous Action)
+Merges internal refined knowledge and external search knowledge:
+```bash
+python scripts/combined_knowledge_preparation.py \
+  --correct_path data/popqa/ref/correct \
+  --incorrect_path data/popqa/ref/incorrect \
+  --ambiguous_path data/popqa/ref/ambiguous
+```
 
-## Cite
-If you think our work is helpful or use the code, please cite the following paper:
+### 4. CRAG Inference
+Run inference to evaluate retrieval confidence, trigger corrective actions, and generate answers:
+```bash
+python scripts/CRAG_Inference.py \
+  --generator_path gpt2 \
+  --evaluator_path t5-small \
+  --input_file data/popqa/test_popqa.txt \
+  --output_file data/popqa/output_preds.txt \
+  --internal_knowledge_path data/popqa/ref/correct \
+  --external_knowledge_path data/popqa/ref/incorrect \
+  --combined_knowledge_path data/popqa/ref/ambiguous \
+  --task popqa \
+  --method crag \
+  --ndocs 10 \
+  --upper_threshold 0.59 \
+  --lower_threshold 0.99
+```
+
+### 5. Evaluation Metrics
+Evaluate generated responses against ground truth benchmarks:
+```bash
+python scripts/eval.py \
+  --input_file data/popqa/test_popqa.txt \
+  --eval_file data/popqa/output_preds.txt \
+  --metric match \
+  --task popqa
+```
+
+---
+
+## Project Structure
 
 ```
+.
+├── demo_crag.py                      # Self-contained end-to-end CRAG pipeline demo
+├── README.md                         # Project documentation and usage guide
+├── requirements.txt                  # Python dependencies
+├── run_crag_inference.sh             # Shell script for CRAG inference
+├── run_data_preprocess.sh            # Shell script for data preprocessing
+├── run_eval.sh                       # Shell script for evaluation
+├── run_evaluator_training.sh         # Shell script for training the evaluator
+├── run_knowledge_preparation.sh      # Shell script for knowledge preparation
+├── run_selfcrag_preparation.sh       # Shell script for Self-CRAG preparation
+├── data/                             # Datasets (PopQA, PubQA, Arc-Challenge, Bio)
+│   ├── popqa/
+│   ├── pubqa/
+│   ├── arc_challenge/
+│   └── bio/
+└── scripts/                          # Core source code
+    ├── CRAG_Inference.py             # Inference loop & generator integration
+    ├── combined_knowledge_preparation.py # Ambiguous action knowledge merger
+    ├── data_process.py               # Dataset preprocessing & formatting
+    ├── eval.py                       # Benchmark evaluation script
+    ├── external_knowledge_preparation.py # Web search & external knowledge loader
+    ├── internal_knowledge_preparation.py # Decompose-then-recompose refinement
+    ├── metrics.py                    # Match & accuracy metric implementations
+    ├── train_evaluator.py            # T5 evaluator fine-tuning script
+    └── utils.py                      # Helper functions & keyword extraction
+```
+
+---
+
+## Citation
+
+If you find this work helpful or use this code, please cite the paper:
+
+```bibtex
 @article{yan2024corrective,
   title={Corrective Retrieval Augmented Generation},
   author={Yan, Shi-Qi and Gu, Jia-Chen and Zhu, Yun and Ling, Zhen-Hua},

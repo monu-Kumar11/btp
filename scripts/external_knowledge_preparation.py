@@ -56,7 +56,7 @@ def Search(queries, search_path, search_key):
         search_dict = [{"queries": query, "results":results}]
         search_results.extend(search_dict)
     if search_path != 'None':
-        with open(search_path, 'w') as f:
+        with open(search_path, 'w', encoding='utf-8') as f:
             output = json.dumps(search_results, indent=4)
             f.write(output)
     return search_results
@@ -64,34 +64,33 @@ def Search(queries, search_path, search_key):
 def test_page_loader(url):
     import requests
     from bs4 import BeautifulSoup
-    import signal
-    def handle(signum, frame):
-        raise RuntimeError
     reconnect = 0
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    response = None
     while reconnect < 3:
         try:
-            signal.signal(signal.SIGALRM, handle)
-            signal.alarm(180)
-            response = requests.get(url)
+            response = requests.get(url, headers=headers, timeout=10)
             break
         except (requests.exceptions.RequestException, ValueError, RuntimeError):
             reconnect += 1
             print('url: {} failed * {}'.format(url, reconnect))
-            if reconnect == 3:
+            if reconnect == 3 or response is None:
                 return []
+    if response is None:
+        return []
     try:
         html = response.text
         soup = BeautifulSoup(html, 'html.parser')
-    except:
+    except Exception:
         return []
     if soup.find('h1') is None or soup.find_all('p') is None:
         return []
     paras = []
-    title = soup.find('h1').text
+    title = soup.find('h1').text.strip()
     paragraphs = soup.find_all('p')
     for i, p in enumerate(paragraphs):
-        if len(p.text) > 10:
-            paras.append(title + ': ' + p.text)
+        if len(p.text.strip()) > 10:
+            paras.append(title + ': ' + p.text.strip())
     return paras
 
 def visit_pages(questions, web_results, output_file, model_name, device, mode):
@@ -156,7 +155,7 @@ def visit_pages(questions, web_results, output_file, model_name, device, mode):
         i += 1
         output_results.append(results.replace('\n', ' '))
         progress_bar.update(1)
-    with open(output_file, 'w') as f:
+    with open(output_file, 'w', encoding='utf-8') as f:
         f.write('#')
         f.write('\n#'.join(output_results))
     return output_results
@@ -175,8 +174,8 @@ def main():
     parser.add_argument('--device', type=str, default="cuda:0")
     args = parser.parse_args()
 
-    os.environ["OPENAI_API_KEY"] = args.openai_key
-    with open(args.input_queries, 'r') as query_f:
+    os.environ["OPENAI_API_KEY"] = args.openai_key if args.openai_key else ""
+    with open(args.input_queries, 'r', encoding='utf-8') as query_f:
         questions = [q.strip() for q in query_f.readlines()][:10]
 
     search_queries = generate_knowledge_q(questions, args.task, args.openai_key, args.mode)
