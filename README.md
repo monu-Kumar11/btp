@@ -193,15 +193,28 @@ python scripts/eval.py \
   --task popqa
 ```
 
-#### B. Groundedness & Hallucination Rate Evaluation
-Evaluate whether generated answers are fully supported by their retrieved context using LLMs (Groq / Gemini) to compute per-query verdicts and aggregate hallucination rates (% UNGROUNDED):
+#### C. Claim-Level Fine-Grained Critic
+Decomposes generated answers into atomic factual claims, checks per-claim entailment (`ENTAILMENT`, `CONTRADICTION`, `NEUTRAL`), and outputs per-query failed claims and groundedness verdicts:
 ```bash
 export GROQ_API_KEY="your_groq_api_key"
-python scripts/groundedness_eval.py \
+python scripts/claim_critic.py \
   --pred_file data/popqa/output_preds.txt \
   --context_file data/popqa/ref/correct \
-  --output_csv logs/groundedness_summary.csv \
+  --output_csv logs/claim_critic_results.csv \
   --backend groq
+```
+
+Importable module usage for retry controllers:
+```python
+from scripts.claim_critic import evaluate_answer_groundedness
+
+result = evaluate_answer_groundedness(
+    answer="Henry Feilden was born in 1818 and served as MP for Blackburn.",
+    context="Henry Master Feilden (1818 - 1875) was a British politician and MP for Blackburn.",
+    backend="groq"
+)
+print(result["is_grounded"])     # True / False
+print(result["failed_claims"])   # List of claims that failed entailment
 ```
 
 ---
