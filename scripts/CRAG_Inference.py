@@ -205,7 +205,8 @@ def main():
     parser.add_argument('--external_knowledge_path', type=str)
     parser.add_argument('--combined_knowledge_path', type=str)
     parser.add_argument('--task', type=str)
-    parser.add_argument('--method', type=str, default="default", choices=['rag', 'plain_rag', 'crag', 'no_retrieval'])
+    parser.add_argument('--method', type=str, default="default", choices=['rag', 'plain_rag', 'crag', 'self_correcting', 'no_retrieval'])
+    parser.add_argument('--max_iterations', type=int, default=3, help="Max retry iterations for self_correcting method")
     parser.add_argument('--device', type=str, default="cuda")
     parser.add_argument('--download_dir', type=str, help="specify vllm model download dir",
                         default=".cache")
@@ -223,6 +224,20 @@ def main():
                         help="Path to output CSV log file for query execution metrics")
     args = parser.parse_args()
     args.lower_threshold = -args.lower_threshold
+
+    if args.method == 'self_correcting':
+        from controller import run_self_correcting_loop
+        run_self_correcting_loop(
+            input_file=args.input_file,
+            context_file=args.internal_knowledge_path,
+            output_file=args.output_file,
+            log_file=args.log_file,
+            backend=args.generator_backend,
+            model_name=args.generator_path,
+            max_iterations=args.max_iterations,
+            task=args.task
+        )
+        return
 
     # Ensure log directory exists and header is written if file is new
     log_dir = os.path.dirname(args.log_file)

@@ -151,6 +151,32 @@ python scripts/CRAG_Inference.py \
   --lower_threshold 0.99
 ```
 
+**Using Self-Correcting RAG Controller Mode (`--method self_correcting`)**:
+Orchestrates an iterative feedback loop: retrieves, generates, runs `claim_critic` entailment checks, reformulates search queries if `UNGROUNDED`, re-retrieves, and retries up to `--max_iterations` (default 3):
+```bash
+export GROQ_API_KEY="your_groq_api_key"
+python scripts/CRAG_Inference.py \
+  --generator_backend groq \
+  --input_file data/popqa/test_popqa.txt \
+  --internal_knowledge_path data/popqa/ref/correct \
+  --output_file data/popqa/self_correcting_preds.txt \
+  --log_file logs/self_correcting_log.csv \
+  --task popqa \
+  --method self_correcting \
+  --max_iterations 3
+```
+
+Or run `scripts/controller.py` directly:
+```bash
+python scripts/controller.py \
+  --input_file data/popqa/test_popqa.txt \
+  --context_file data/popqa/ref/correct \
+  --output_file data/popqa/self_correcting_preds.txt \
+  --log_file logs/self_correcting_log.csv \
+  --backend groq \
+  --max_iterations 3
+```
+
 **Using Plain RAG Baseline Mode (`--method plain_rag`)**:
 Skips retrieval evaluator and knowledge refinement, feeding top-k retrieved passages directly to the generator:
 ```bash
