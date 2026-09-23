@@ -182,6 +182,8 @@ python scripts/CRAG_Inference.py \
 ```
 
 ### 5. Evaluation Metrics
+
+#### A. Exact Match / Accuracy Evaluation
 Evaluate generated responses against ground truth benchmarks:
 ```bash
 python scripts/eval.py \
@@ -189,6 +191,17 @@ python scripts/eval.py \
   --eval_file data/popqa/output_preds.txt \
   --metric match \
   --task popqa
+```
+
+#### B. Groundedness & Hallucination Rate Evaluation
+Evaluate whether generated answers are fully supported by their retrieved context using LLMs (Groq / Gemini) to compute per-query verdicts and aggregate hallucination rates (% UNGROUNDED):
+```bash
+export GROQ_API_KEY="your_groq_api_key"
+python scripts/groundedness_eval.py \
+  --pred_file data/popqa/output_preds.txt \
+  --context_file data/popqa/ref/correct \
+  --output_csv logs/groundedness_summary.csv \
+  --backend groq
 ```
 
 ---
