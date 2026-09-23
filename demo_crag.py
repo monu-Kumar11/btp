@@ -111,7 +111,36 @@ def generate_answer(query, context, task="popqa"):
     print("\n[Step 6] Final Answer Generation...")
     prompt = f"Refer to the following documents, follow the instruction and answer the question.\n\nDocuments: {context}\n\nInstruction: Answer the question: {query}"
     print(f"--- Prompt Sent to Generator ---\n{prompt[:300]}...\n--------------------------------")
-    
+
+    groq_key = os.environ.get("GROQ_API_KEY")
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+
+    if groq_key:
+        try:
+            from groq import Groq
+            client = Groq(api_key=groq_key)
+            completion = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="openai/gpt-oss-120b",
+                temperature=0.0,
+                max_tokens=100,
+            )
+            print("  (Generated via Groq API: openai/gpt-oss-120b)")
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"  Groq API call failed: {e}")
+
+    if gemini_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            response = model.generate_content(prompt)
+            print("  (Generated via Gemini API: gemini-2.5-flash)")
+            return response.text.strip()
+        except Exception as e:
+            print(f"  Gemini API call failed: {e}")
+
     answer = f"Generated answer for query '{query}' based on retrieved/refined knowledge context."
     return answer
 

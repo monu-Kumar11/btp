@@ -15,7 +15,6 @@ from torch.utils.data import TensorDataset, DataLoader, RandomSampler, Sequentia
 from torch.optim import AdamW
 from transformers import get_scheduler
 
-from vllm import LLM, SamplingParams
 from transformers import T5Tokenizer, T5ForSequenceClassification
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -209,6 +208,8 @@ def main():
     parser.add_argument('--device', type=str, default="cuda")
     parser.add_argument('--download_dir', type=str, help="specify vllm model download dir",
                         default=".cache")
+    parser.add_argument('--generator_backend', type=str, default="local", choices=['groq', 'gemini', 'local'],
+                        help="Generator backend to use: groq, gemini, or local")
     parser.add_argument("--ndocs", type=int, default=-1,
                         help="Number of documents to retrieve per questions")
     parser.add_argument("--batch_size", type=int, default=8,
@@ -220,18 +221,40 @@ def main():
     args = parser.parse_args()
     args.lower_threshold = -args.lower_threshold
 
-    # Load generator model (support vLLM or standard HuggingFace)
-    try:
-        from vllm import LLM, SamplingParams
-        generator = LLM(model=args.generator_path, dtype="half")
-        sampling_params = SamplingParams(temperature=0.0, top_p=1.0, max_tokens=100, skip_special_tokens=False)
-        is_vllm = True
-    except (ImportError, Exception) as err:
-        print(f"vLLM not available or failed to load ({err}), falling back to HuggingFace pipeline.")
-        from transformers import pipeline
-        device_id = 0 if torch.cuda.is_available() else -1
-        generator = pipeline("text-generation", model=args.generator_path, device=device_id)
-        is_vllm = False
+    # Initialize Generator backend (Groq API, Gemini API, or local vLLM/HuggingFace)
+    if args.generator_backend == "groq":
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY environment variable is not set.")
+        try:
+            from groq import Groq
+        except ImportError:
+            raise ImportError("Please install the groq package using 'pip install groq'.")
+        groq_client = Groq(api_key=api_key)
+        model_name = args.generator_path if (args.generator_path and "/" not in args.generator_path) else "openai/gpt-oss-120b"
+    elif args.generator_backend == "gemini":
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY environment variable is not set.")
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            raise ImportError("Please install google-generativeai using 'pip install google-generativeai'.")
+        genai.configure(api_key=api_key)
+        model_name = args.generator_path if (args.generator_path and "/" not in args.generator_path) else "gemini-2.5-flash"
+        gemini_model = genai.GenerativeModel(model_name)
+    else:
+        try:
+            from vllm import LLM, SamplingParams
+            generator = LLM(model=args.generator_path, dtype="half")
+            sampling_params = SamplingParams(temperature=0.0, top_p=1.0, max_tokens=100, skip_special_tokens=False)
+            is_vllm = True
+        except (ImportError, Exception) as err:
+            print(f"vLLM not available or failed to load ({err}), falling back to HuggingFace pipeline.")
+            from transformers import pipeline
+            device_id = 0 if torch.cuda.is_available() else -1
+            generator = pipeline("text-generation", model=args.generator_path, device=device_id)
+            is_vllm = False
 
     tokenizer = T5Tokenizer.from_pretrained(args.evaluator_path)
     model = T5ForSequenceClassification.from_pretrained(args.evaluator_path, num_labels=1)
@@ -268,29 +291,42 @@ def main():
                 paragraphs.append(i) # correct
             n += 1
     
+    def generate_response(prompt):
+        if args.generator_backend == "groq":
+            chat_completion = groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model_name,
+                temperature=0.0,
+                max_tokens=100,
+            )
+            return chat_completion.choices[0].message.content
+        elif args.generator_backend == "gemini":
+            response = gemini_model.generate_content(prompt)
+            return response.text
+        else:
+            if is_vllm:
+                pred = generator.generate([prompt], sampling_params)
+                return pred[0].outputs[0].text
+            else:
+                out = generator(prompt, max_new_tokens=100, do_sample=False)
+                generated_text = out[0]['generated_text']
+                if generated_text.startswith(prompt):
+                    generated_text = generated_text[len(prompt):]
+                return generated_text
+
     preds = []
-    modelname = "selfrag_llama" if "selfrag" in args.generator_path else "llama"
+    modelname = "selfrag_llama" if (args.generator_path and "selfrag" in args.generator_path) else "llama"
     if args.method != 'no_retrieval':
         for i, (q, p) in tqdm(enumerate(zip(queries, paragraphs))):
             prompt = format_prompt(i, args.task, q, p, modelname)
-            if is_vllm:
-                pred = generator.generate([prompt], sampling_params)
-                preds.append(postprocess_answer_option_conditioned(pred[0].outputs[0].text))
-            else:
-                out = generator(prompt, max_new_tokens=100, do_sample=False)
-                generated_text = out[0]['generated_text'][len(prompt):] if out[0]['generated_text'].startswith(prompt) else out[0]['generated_text']
-                preds.append(postprocess_answer_option_conditioned(generated_text))
+            raw_text = generate_response(prompt)
+            preds.append(postprocess_answer_option_conditioned(raw_text))
     else:
         for i, q in tqdm(enumerate(queries)):
             p = None
             prompt = format_prompt(i, args.task, q, p, modelname)
-            if is_vllm:
-                pred = generator.generate([prompt], sampling_params)
-                preds.append(postprocess_answer_option_conditioned(pred[0].outputs[0].text))
-            else:
-                out = generator(prompt, max_new_tokens=100, do_sample=False)
-                generated_text = out[0]['generated_text'][len(prompt):] if out[0]['generated_text'].startswith(prompt) else out[0]['generated_text']
-                preds.append(postprocess_answer_option_conditioned(generated_text))
+            raw_text = generate_response(prompt)
+            preds.append(postprocess_answer_option_conditioned(raw_text))
 
     with open(args.output_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(preds))

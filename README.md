@@ -113,9 +113,48 @@ python scripts/combined_knowledge_preparation.py \
 ```
 
 ### 4. CRAG Inference
-Run inference to evaluate retrieval confidence, trigger corrective actions, and generate answers:
+Run inference to evaluate retrieval confidence, trigger corrective actions, and generate answers using hosted LLM APIs (Groq or Gemini) or local models:
+
+**Using Groq API Backend**:
+```bash
+export GROQ_API_KEY="your_groq_api_key"
+python scripts/CRAG_Inference.py \
+  --generator_backend groq \
+  --evaluator_path t5-small \
+  --input_file data/popqa/test_popqa.txt \
+  --output_file data/popqa/output_preds.txt \
+  --internal_knowledge_path data/popqa/ref/correct \
+  --external_knowledge_path data/popqa/ref/incorrect \
+  --combined_knowledge_path data/popqa/ref/ambiguous \
+  --task popqa \
+  --method crag \
+  --ndocs 10 \
+  --upper_threshold 0.59 \
+  --lower_threshold 0.99
+```
+
+**Using Gemini API Backend**:
+```bash
+export GEMINI_API_KEY="your_gemini_api_key"
+python scripts/CRAG_Inference.py \
+  --generator_backend gemini \
+  --evaluator_path t5-small \
+  --input_file data/popqa/test_popqa.txt \
+  --output_file data/popqa/output_preds.txt \
+  --internal_knowledge_path data/popqa/ref/correct \
+  --external_knowledge_path data/popqa/ref/incorrect \
+  --combined_knowledge_path data/popqa/ref/ambiguous \
+  --task popqa \
+  --method crag \
+  --ndocs 10 \
+  --upper_threshold 0.59 \
+  --lower_threshold 0.99
+```
+
+**Using Local Backend (vLLM / HuggingFace)**:
 ```bash
 python scripts/CRAG_Inference.py \
+  --generator_backend local \
   --generator_path gpt2 \
   --evaluator_path t5-small \
   --input_file data/popqa/test_popqa.txt \
