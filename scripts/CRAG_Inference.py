@@ -204,7 +204,7 @@ def main():
     parser.add_argument('--external_knowledge_path', type=str)
     parser.add_argument('--combined_knowledge_path', type=str)
     parser.add_argument('--task', type=str)
-    parser.add_argument('--method', type=str, default="default", choices=['rag', 'crag', 'no_retrieval'])
+    parser.add_argument('--method', type=str, default="default", choices=['rag', 'plain_rag', 'crag', 'no_retrieval'])
     parser.add_argument('--device', type=str, default="cuda")
     parser.add_argument('--download_dir', type=str, help="specify vllm model download dir",
                         default=".cache")
@@ -256,16 +256,16 @@ def main():
             generator = pipeline("text-generation", model=args.generator_path, device=device_id)
             is_vllm = False
 
-    tokenizer = T5Tokenizer.from_pretrained(args.evaluator_path)
-    model = T5ForSequenceClassification.from_pretrained(args.evaluator_path, num_labels=1)
-    device = torch.device(args.device) if torch.cuda.is_available() else torch.device("cpu")
-    model.to(device)
-
     queries, passages = data_preprocess(args.input_file, args.ndocs)
 
-    if args.method == 'rag':
+    if args.method in ['rag', 'plain_rag']:
         paragraphs = passages
     elif args.method == 'crag':
+        tokenizer = T5Tokenizer.from_pretrained(args.evaluator_path)
+        model = T5ForSequenceClassification.from_pretrained(args.evaluator_path, num_labels=1)
+        device = torch.device(args.device) if torch.cuda.is_available() else torch.device("cpu")
+        model.to(device)
+
         scores = inference(
             tokenizer=tokenizer, 
             model=model, 

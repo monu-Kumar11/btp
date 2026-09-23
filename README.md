@@ -151,6 +151,18 @@ python scripts/CRAG_Inference.py \
   --lower_threshold 0.99
 ```
 
+**Using Plain RAG Baseline Mode (`--method plain_rag`)**:
+Skips retrieval evaluator and knowledge refinement, feeding top-k retrieved passages directly to the generator:
+```bash
+python scripts/CRAG_Inference.py \
+  --generator_backend groq \
+  --input_file data/popqa/test_popqa.txt \
+  --output_file data/popqa/plain_rag_preds.txt \
+  --task popqa \
+  --method plain_rag \
+  --ndocs 10
+```
+
 **Using Local Backend (vLLM / HuggingFace)**:
 ```bash
 python scripts/CRAG_Inference.py \
