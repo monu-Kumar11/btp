@@ -18,6 +18,7 @@ from transformers import get_scheduler
 from transformers import T5Tokenizer, T5ForSequenceClassification
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+import csv
 import time
 
 # logger = logging.getLogger(__name__)
@@ -218,8 +219,31 @@ def main():
                         help="Number of documents to retrieve per questions")
     parser.add_argument("--lower_threshold", type=float, default=10,
                         help="Number of documents to retrieve per questions")
+    parser.add_argument('--log_file', type=str, default="../logs/run_log.csv",
+                        help="Path to output CSV log file for query execution metrics")
     args = parser.parse_args()
     args.lower_threshold = -args.lower_threshold
+
+    # Ensure log directory exists and header is written if file is new
+    log_dir = os.path.dirname(args.log_file)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+    file_exists = os.path.exists(args.log_file) and os.path.getsize(args.log_file) > 0
+    if not file_exists:
+        with open(args.log_file, 'a', newline='', encoding='utf-8') as log_f:
+            writer = csv.writer(log_f)
+            writer.writerow([
+                "query_id",
+                "method",
+                "action_triggered",
+                "num_generation_calls",
+                "num_evaluator_calls",
+                "total_input_tokens",
+                "total_output_tokens",
+                "latency_seconds",
+                "final_answer"
+            ])
 
     # Initialize Generator backend (Groq API, Gemini API, or local vLLM/HuggingFace)
     if args.generator_backend == "groq":
@@ -292,6 +316,10 @@ def main():
             n += 1
     
     def generate_response(prompt):
+        raw_text = ""
+        in_tok = 0
+        out_tok = 0
+
         if args.generator_backend == "groq":
             chat_completion = groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -299,34 +327,100 @@ def main():
                 temperature=0.0,
                 max_tokens=100,
             )
-            return chat_completion.choices[0].message.content
+            raw_text = chat_completion.choices[0].message.content or ""
+            if hasattr(chat_completion, 'usage') and chat_completion.usage:
+                in_tok = chat_completion.usage.prompt_tokens or len(prompt.split())
+                out_tok = chat_completion.usage.completion_tokens or len(raw_text.split())
+            else:
+                in_tok = len(prompt.split())
+                out_tok = len(raw_text.split())
+
         elif args.generator_backend == "gemini":
             response = gemini_model.generate_content(prompt)
-            return response.text
+            raw_text = response.text or ""
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                in_tok = getattr(response.usage_metadata, 'prompt_token_count', len(prompt.split()))
+                out_tok = getattr(response.usage_metadata, 'candidates_token_count', len(raw_text.split()))
+            else:
+                in_tok = len(prompt.split())
+                out_tok = len(raw_text.split())
+
         else:
             if is_vllm:
                 pred = generator.generate([prompt], sampling_params)
-                return pred[0].outputs[0].text
+                raw_text = pred[0].outputs[0].text or ""
+                in_tok = len(prompt.split())
+                out_tok = len(raw_text.split())
             else:
                 out = generator(prompt, max_new_tokens=100, do_sample=False)
                 generated_text = out[0]['generated_text']
                 if generated_text.startswith(prompt):
                     generated_text = generated_text[len(prompt):]
-                return generated_text
+                raw_text = generated_text or ""
+                in_tok = len(prompt.split())
+                out_tok = len(raw_text.split())
+
+        return raw_text, in_tok, out_tok
 
     preds = []
+    action_map = {0: "incorrect", 1: "ambiguous", 2: "correct"}
     modelname = "selfrag_llama" if (args.generator_path and "selfrag" in args.generator_path) else "llama"
+
     if args.method != 'no_retrieval':
         for i, (q, p) in tqdm(enumerate(zip(queries, paragraphs))):
+            t_start = time.time()
             prompt = format_prompt(i, args.task, q, p, modelname)
-            raw_text = generate_response(prompt)
-            preds.append(postprocess_answer_option_conditioned(raw_text))
+            raw_text, in_tok, out_tok = generate_response(prompt)
+            final_ans = postprocess_answer_option_conditioned(raw_text)
+            preds.append(final_ans)
+            latency = round(time.time() - t_start, 4)
+
+            if args.method == 'crag':
+                flag_val = identification_flag[i] if i < len(identification_flag) else 0
+                action_str = action_map.get(flag_val, "none")
+                eval_calls = args.ndocs if args.ndocs > 0 else 10
+            else:
+                action_str = "none"
+                eval_calls = 0
+
+            with open(args.log_file, 'a', newline='', encoding='utf-8') as log_f:
+                writer = csv.writer(log_f)
+                writer.writerow([
+                    i,
+                    args.method,
+                    action_str,
+                    1,
+                    eval_calls,
+                    in_tok,
+                    out_tok,
+                    latency,
+                    final_ans
+                ])
+                log_f.flush()
     else:
         for i, q in tqdm(enumerate(queries)):
+            t_start = time.time()
             p = None
             prompt = format_prompt(i, args.task, q, p, modelname)
-            raw_text = generate_response(prompt)
-            preds.append(postprocess_answer_option_conditioned(raw_text))
+            raw_text, in_tok, out_tok = generate_response(prompt)
+            final_ans = postprocess_answer_option_conditioned(raw_text)
+            preds.append(final_ans)
+            latency = round(time.time() - t_start, 4)
+
+            with open(args.log_file, 'a', newline='', encoding='utf-8') as log_f:
+                writer = csv.writer(log_f)
+                writer.writerow([
+                    i,
+                    args.method,
+                    "none",
+                    1,
+                    0,
+                    in_tok,
+                    out_tok,
+                    latency,
+                    final_ans
+                ])
+                log_f.flush()
 
     with open(args.output_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(preds))
