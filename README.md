@@ -264,6 +264,14 @@ Generates in `results/`:
 - `results/cost_comparison.png`: Dual bar charts comparing avg token consumption and latency per query.
 - `results/retry_distribution.png`: Percentage breakdown of questions resolved per retry count.
 
+#### G. "Caught and Fixed" Case Studies Finder
+To extract canonical case studies where `plain_rag` hallucinated but `self_correcting` corrected the output:
+```bash
+python scripts/find_examples.py --backend groq
+```
+Generates in `results/`:
+- `results/worked_examples.md`: Presentation-ready markdown document detailing questions, hallucinated claims, retries taken, and final grounded answers.
+
 ---
 
 ## Project Structure
