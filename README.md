@@ -253,11 +253,16 @@ Outputs are logged to:
 - `logs/full_crag.csv`
 - `logs/full_self_correcting.csv`
 
-#### E. Automated Master Verification Suite
-To run all system verification checks (`run_final_check.py`, `check_logs.py`, `compare_methods.py`, `test_claim_critic.py`) in sequence:
+#### F. Results & Visualizations Generator
+To parse all full-run logs and generate summary table CSV plus high-resolution benchmark plots:
 ```bash
-python scripts/final_verification.py --backend groq
+python scripts/generate_results.py --backend groq
 ```
+Generates in `results/`:
+- `results/summary_table.csv`: Consolidated metrics (hallucination rate, avg tokens, latency, estimated cost, avg retries).
+- `results/hallucination_rate.png`: Bar chart comparing hallucination rate (% UNGROUNDED) across methods.
+- `results/cost_comparison.png`: Dual bar charts comparing avg token consumption and latency per query.
+- `results/retry_distribution.png`: Percentage breakdown of questions resolved per retry count.
 
 ---
 

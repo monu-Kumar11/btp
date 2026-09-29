@@ -1,0 +1,4 @@
+method,hallucination_rate,avg_tokens_per_query,avg_latency_seconds,avg_cost_per_query,avg_retries_used
+plain_rag,80.0%,1011.6,0.7066,$0.000197,N/A
+crag,100.0%,1011.6,0.8036,$0.000197,N/A
+self_correcting,100.0%,2286.11,37.4824,$0.000513,1.78
