@@ -56,10 +56,33 @@ def init_llm(backend="groq", model_name=None):
         genai_model = genai.GenerativeModel(model)
         return genai_model, model
 
-def _call_llm(backend, client_or_model, model_name, prompt):
+def _call_llm(backend, client_or_model, model_name, prompt, max_retries=5, backoff=2):
     """
     Internal helper to execute LLM prompt.
     """
+    import time
+    for attempt in range(max_retries):
+        try:
+            if backend == "groq":
+                response = client_or_model.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=model_name,
+                    temperature=0.0,
+                    max_tokens=150,
+                )
+                return response.choices[0].message.content or ""
+            elif backend == "gemini":
+                response = client_or_model.generate_content(prompt)
+                return response.text or ""
+        except Exception as e:
+            err_msg = str(e).lower()
+            if any(k in err_msg for k in ["rate", "limit", "429", "503", "500", "quota", "overloaded"]):
+                wait_t = backoff * (2 ** attempt)
+                print(f"\n[Rate Limit / Transient Error] {e}. Retrying in {wait_t}s (Attempt {attempt+1}/{max_retries})...")
+                time.sleep(wait_t)
+            else:
+                raise e
+
     if backend == "groq":
         response = client_or_model.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],

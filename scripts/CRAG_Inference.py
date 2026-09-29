@@ -300,35 +300,42 @@ def main():
     if args.method in ['rag', 'plain_rag']:
         paragraphs = passages
     elif args.method == 'crag':
-        tokenizer = T5Tokenizer.from_pretrained(args.evaluator_path)
-        model = T5ForSequenceClassification.from_pretrained(args.evaluator_path, num_labels=1)
-        device = torch.device(args.device) if torch.cuda.is_available() else torch.device("cpu")
-        model.to(device)
+        if args.evaluator_path and os.path.exists(args.evaluator_path):
+            tokenizer = T5Tokenizer.from_pretrained(args.evaluator_path)
+            model = T5ForSequenceClassification.from_pretrained(args.evaluator_path, num_labels=1)
+            device = torch.device(args.device) if torch.cuda.is_available() else torch.device("cpu")
+            model.to(device)
 
-        scores = inference(
-            tokenizer=tokenizer, 
-            model=model, 
-            file=args.input_file,
-            device=device, 
-            n_docs=args.ndocs
-        )
-        identification_flag = process_flag(scores, args.ndocs, args.upper_threshold, args.lower_threshold)
+            scores = inference(
+                tokenizer=tokenizer, 
+                model=model, 
+                file=args.input_file,
+                device=device, 
+                n_docs=args.ndocs
+            )
+            identification_flag = process_flag(scores, args.ndocs, args.upper_threshold, args.lower_threshold)
+        else:
+            print("Warning: evaluator_path not specified or not found. Defaulting identification flags to 2 (correct).")
+            identification_flag = [2] * len(queries)
 
-        with open(args.internal_knowledge_path, 'r', encoding='utf-8') as in_f, open(args.external_knowledge_path, 'r', encoding='utf-8') as ex_f, open(args.combined_knowledge_path, 'r', encoding='utf-8') as comb_f:
-            internal_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in in_f.readlines()]
-            external_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in ex_f.readlines()]
-            combined_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in comb_f.readlines()]
+        if (args.internal_knowledge_path and os.path.exists(args.internal_knowledge_path) and
+            args.external_knowledge_path and os.path.exists(args.external_knowledge_path) and
+            args.combined_knowledge_path and os.path.exists(args.combined_knowledge_path)):
+            with open(args.internal_knowledge_path, 'r', encoding='utf-8') as in_f, open(args.external_knowledge_path, 'r', encoding='utf-8') as ex_f, open(args.combined_knowledge_path, 'r', encoding='utf-8') as comb_f:
+                internal_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in in_f.readlines()]
+                external_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in ex_f.readlines()]
+                combined_paragraphs = [l.strip()[1:] if l.strip().startswith('#') else l.strip() for l in comb_f.readlines()]
 
-        paragraphs = []
-        n = 0
-        for flag, i, e, c in zip(identification_flag, internal_paragraphs, external_paragraphs, combined_paragraphs):
-            if flag == 0:
-                paragraphs.append(e) # incorrect
-            elif flag == 1:
-                paragraphs.append(c) # ambiguous
-            elif flag == 2:
-                paragraphs.append(i) # correct
-            n += 1
+            paragraphs = []
+            for flag, i, e, c in zip(identification_flag, internal_paragraphs, external_paragraphs, combined_paragraphs):
+                if flag == 0:
+                    paragraphs.append(e) # incorrect
+                elif flag == 1:
+                    paragraphs.append(c) # ambiguous
+                elif flag == 2:
+                    paragraphs.append(i) # correct
+        else:
+            paragraphs = passages
     
     def generate_response(prompt):
         raw_text = ""
@@ -377,16 +384,55 @@ def main():
 
         return raw_text, in_tok, out_tok
 
+    def generate_response_with_retry(prompt, max_retries=5, backoff=2):
+        for attempt in range(max_retries):
+            try:
+                return generate_response(prompt)
+            except Exception as e:
+                err_msg = str(e).lower()
+                if any(k in err_msg for k in ["rate", "limit", "429", "503", "500", "quota", "overloaded"]):
+                    wait_t = backoff * (2 ** attempt)
+                    print(f"\n[Rate Limit / Transient Error] {e}. Retrying in {wait_t}s (Attempt {attempt+1}/{max_retries})...")
+                    time.sleep(wait_t)
+                else:
+                    raise e
+        return generate_response(prompt)
+
+    completed_ids = set()
+    completed_preds = {}
+
+    if os.path.exists(args.log_file) and os.path.getsize(args.log_file) > 0:
+        with open(args.log_file, 'r', encoding='utf-8') as lf:
+            reader = csv.reader(lf)
+            header = next(reader, None)
+            for row in reader:
+                if row and len(row) >= 9:
+                    try:
+                        qid = int(row[0].strip())
+                        completed_ids.add(qid)
+                        completed_preds[qid] = row[8].strip()
+                    except ValueError:
+                        pass
+
+    if completed_ids:
+        print(f"Resuming {args.method}: Found {len(completed_ids)} already completed queries in {args.log_file}.")
+
     preds = []
     action_map = {0: "incorrect", 1: "ambiguous", 2: "correct"}
     modelname = "selfrag_llama" if (args.generator_path and "selfrag" in args.generator_path) else "llama"
 
     if args.method != 'no_retrieval':
-        for i, (q, p) in tqdm(enumerate(zip(queries, paragraphs))):
+        for i, (q, p) in tqdm(enumerate(zip(queries, paragraphs)), total=len(queries)):
+            if i in completed_ids:
+                preds.append(completed_preds.get(i, ""))
+                continue
+
             t_start = time.time()
             prompt = format_prompt(i, args.task, q, p, modelname)
-            raw_text, in_tok, out_tok = generate_response(prompt)
+            raw_text, in_tok, out_tok = generate_response_with_retry(prompt)
             final_ans = postprocess_answer_option_conditioned(raw_text)
+            if not final_ans:
+                final_ans = raw_text.strip() if raw_text.strip() else "No answer generated"
             preds.append(final_ans)
             latency = round(time.time() - t_start, 4)
 
@@ -412,12 +458,22 @@ def main():
                     final_ans
                 ])
                 log_f.flush()
+
+            out_dir = os.path.dirname(args.output_file)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            with open(args.output_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(preds))
     else:
-        for i, q in tqdm(enumerate(queries)):
+        for i, q in tqdm(enumerate(queries), total=len(queries)):
+            if i in completed_ids:
+                preds.append(completed_preds.get(i, ""))
+                continue
+
             t_start = time.time()
             p = None
             prompt = format_prompt(i, args.task, q, p, modelname)
-            raw_text, in_tok, out_tok = generate_response(prompt)
+            raw_text, in_tok, out_tok = generate_response_with_retry(prompt)
             final_ans = postprocess_answer_option_conditioned(raw_text)
             preds.append(final_ans)
             latency = round(time.time() - t_start, 4)
@@ -436,6 +492,12 @@ def main():
                     final_ans
                 ])
                 log_f.flush()
+
+            out_dir = os.path.dirname(args.output_file)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            with open(args.output_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(preds))
 
     with open(args.output_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(preds))

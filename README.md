@@ -243,6 +243,22 @@ print(result["is_grounded"])     # True / False
 print(result["failed_claims"])   # List of claims that failed entailment
 ```
 
+#### D. 100-Question Evaluation Runner with Resume Support
+Sample `--n_samples` questions (default 100) and execute `plain_rag`, `crag`, and `self_correcting` with automatic rate-limit backoff and query-level resume:
+```bash
+python scripts/run_eval_100.py --n_samples 100 --backend groq
+```
+Outputs are logged to:
+- `logs/full_plain_rag.csv`
+- `logs/full_crag.csv`
+- `logs/full_self_correcting.csv`
+
+#### E. Automated Master Verification Suite
+To run all system verification checks (`run_final_check.py`, `check_logs.py`, `compare_methods.py`, `test_claim_critic.py`) in sequence:
+```bash
+python scripts/final_verification.py --backend groq
+```
+
 ---
 
 ## Project Structure
@@ -264,13 +280,22 @@ print(result["failed_claims"])   # List of claims that failed entailment
 │   ├── arc_challenge/
 │   └── bio/
 └── scripts/                          # Core source code
-    ├── CRAG_Inference.py             # Inference loop & generator integration
+    ├── check_logs.py                 # Structured CSV log validator
+    ├── claim_critic.py               # Fine-grained claim critic & entailment evaluator
     ├── combined_knowledge_preparation.py # Ambiguous action knowledge merger
+    ├── compare_methods.py            # Comparative groundedness & hallucination benchmark
+    ├── controller.py                 # Self-correcting iterative RAG controller
+    ├── CRAG_Inference.py             # Main inference runner (supports groq/gemini/local)
     ├── data_process.py               # Dataset preprocessing & formatting
-    ├── eval.py                       # Benchmark evaluation script
+    ├── eval.py                       # Benchmark exact-match evaluation script
     ├── external_knowledge_preparation.py # Web search & external knowledge loader
+    ├── final_verification.py         # Master verification orchestrator suite
+    ├── groundedness_eval.py          # Groundedness & hallucination rate evaluator
     ├── internal_knowledge_preparation.py # Decompose-then-recompose refinement
     ├── metrics.py                    # Match & accuracy metric implementations
+    ├── run_eval_100.py               # 100-question eval runner with retry & resume
+    ├── run_final_check.py            # End-to-end multi-method sanity checker
+    ├── test_claim_critic.py          # Unit tests for claim critic on canonical cases
     ├── train_evaluator.py            # T5 evaluator fine-tuning script
     └── utils.py                      # Helper functions & keyword extraction
 ```

@@ -47,6 +47,7 @@ def parse_args():
 def load_queries_and_contexts(input_file, context_file=None):
     queries = []
     contexts = []
+    tmp_psgs = []
     with open(input_file, 'r', encoding='utf-8') as f:
         for line in f.readlines():
             c = line.strip()
@@ -54,11 +55,23 @@ def load_queries_and_contexts(input_file, context_file=None):
                 continue
             if ' [SEP] ' in c:
                 parts = c.split(' [SEP] ')
-                queries.append(parts[0])
-                contexts.append(parts[1])
+                q, p = parts[0], parts[1]
             else:
-                queries.append(c)
-                contexts.append("")
+                q, p = c, ""
+
+            if not queries:
+                queries.append(q)
+                tmp_psgs = [p] if p else []
+            else:
+                if q != queries[-1]:
+                    contexts.append(" [sep] ".join(tmp_psgs))
+                    queries.append(q)
+                    tmp_psgs = [p] if p else []
+                else:
+                    if p:
+                        tmp_psgs.append(p)
+        if queries and len(contexts) < len(queries):
+            contexts.append(" [sep] ".join(tmp_psgs))
 
     if context_file and os.path.exists(context_file):
         with open(context_file, 'r', encoding='utf-8') as f:
@@ -107,6 +120,20 @@ def generate_llm_response(prompt, backend, client_or_model, model_name):
 
     return raw_text.strip(), in_tok, out_tok
 
+def generate_llm_response_with_retry(prompt, backend, client_or_model, model_name, max_retries=5, backoff=2):
+    for attempt in range(max_retries):
+        try:
+            return generate_llm_response(prompt, backend, client_or_model, model_name)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if any(k in err_msg for k in ["rate", "limit", "429", "503", "500", "quota", "overloaded"]):
+                wait_t = backoff * (2 ** attempt)
+                print(f"\n[Rate Limit / Transient Error] {e}. Retrying in {wait_t}s (Attempt {attempt+1}/{max_retries})...")
+                time.sleep(wait_t)
+            else:
+                raise e
+    return generate_llm_response(prompt, backend, client_or_model, model_name)
+
 def search_external_web(search_query):
     wiki_url = f"https://en.wikipedia.org/wiki/{search_query.replace(' ', '_')}"
     paras = test_page_loader(wiki_url)
@@ -147,11 +174,45 @@ def run_self_correcting_loop(input_file, context_file, output_file, log_file, ba
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    completed_ids = set()
+    completed_preds = {}
+
+    if os.path.exists(log_file) and os.path.getsize(log_file) > 0:
+        with open(log_file, 'r', encoding='utf-8') as lf:
+            reader = csv.reader(lf)
+            header = next(reader, None)
+            for row in reader:
+                if row and len(row) >= 10:
+                    try:
+                        qid = int(row[0].strip())
+                        action = row[2].strip()
+                        ret_iter = int(row[9].strip())
+                        if action == "correct" or ret_iter >= max_iterations:
+                            completed_ids.add(qid)
+                            completed_preds[qid] = row[8].strip()
+                    except ValueError:
+                        pass
+
+    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+        with open(output_file, 'r', encoding='utf-8') as f:
+            existing_lines = [l.strip() for l in f.readlines()]
+        for idx, line in enumerate(existing_lines):
+            if line:
+                completed_ids.add(idx)
+                completed_preds[idx] = line
+
+    if completed_ids:
+        print(f"Resuming Self-Correcting RAG: Found {len(completed_ids)} already completed queries in log/output.")
+
     final_predictions = []
 
     print(f"\nStarting Self-Correcting RAG Controller for {len(queries)} queries (Max Iterations: {max_iterations}, Backend: {backend})...\n")
 
     for q_id, (query, init_ctx) in enumerate(tqdm(zip(queries, initial_contexts), total=len(queries))):
+        if q_id in completed_ids:
+            final_predictions.append(completed_preds.get(q_id, ""))
+            continue
+
         current_context = init_ctx
         iter_count = 0
         final_answer = ""
@@ -163,7 +224,9 @@ def run_self_correcting_loop(input_file, context_file, output_file, log_file, ba
 
             # Step 1 & 2: Generate answer
             gen_prompt = format_generation_prompt(query, current_context, task)
-            candidate_ans, in_tok, out_tok = generate_llm_response(gen_prompt, backend, client_or_model, model_name)
+            candidate_ans, in_tok, out_tok = generate_llm_response_with_retry(gen_prompt, backend, client_or_model, model_name)
+            if not candidate_ans:
+                candidate_ans = "No answer generated"
 
             # Step 3: Run claim_critic entailment check
             critic_res = evaluate_answer_groundedness(candidate_ans, current_context, backend=backend, client_or_model=client_or_model, model_name=model_name)
@@ -200,7 +263,7 @@ def run_self_correcting_loop(input_file, context_file, output_file, log_file, ba
                         f"Original query: {query}\n"
                         "Return only the rewritten search query."
                     )
-                    rewritten_query, _, _ = generate_llm_response(rewrite_prompt, backend, client_or_model, model_name)
+                    rewritten_query, _, _ = generate_llm_response_with_retry(rewrite_prompt, backend, client_or_model, model_name)
                     new_kw = rewritten_query.strip().split("\n")[0].replace('"', '').strip()
 
                     # Re-retrieve web/wikipedia knowledge
@@ -211,6 +274,10 @@ def run_self_correcting_loop(input_file, context_file, output_file, log_file, ba
                     final_answer = f"[Low Confidence] {candidate_ans}"
 
         final_predictions.append(final_answer)
+
+        # Save output incrementally after each query
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(final_predictions))
 
     # Save final output predictions
     with open(output_file, 'w', encoding='utf-8') as f:
